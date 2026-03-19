@@ -1,5 +1,211 @@
-import Map from './map.js';
 import TileRenderer from './tileRenderer.js';
+
+// ─── ChunkManager (frontend mock — swap internals for API later) ───────────────
+
+class ChunkManager {
+    constructor(chunkSize = 32, tileSize = 50) {
+        this.chunkSize = chunkSize;
+        this.tileSize = tileSize;
+        this.loadedChunks = new Map();
+        this.worldSeed = Math.floor(Math.random() * 2 ** 31);
+    }
+
+    // Deterministic pseudo-random from chunk coords + seed
+    _chunkRng(chunkX, chunkY) {
+        let h = this.worldSeed ^ (chunkX * 374761393) ^ (chunkY * 1057926937);
+        h = Math.imul(h ^ (h >>> 13), 1540483477);
+        h ^= h >>> 15;
+        return () => {
+            h = Math.imul(h ^ (h >>> 13), 1540483477);
+            h ^= h >>> 15;
+            return (h >>> 0) / 0xffffffff;
+        };
+    }
+
+    _generateChunk(chunkX, chunkY) {
+        const rng = this._chunkRng(chunkX, chunkY);
+        const size = this.chunkSize;
+        const terrain = [];
+
+        for (let y = 0; y < size; y++) {
+            const row = [];
+            for (let x = 0; x < size; x++) {
+                const isBorder = x === 0 || y === 0 || x === size - 1 || y === size - 1;
+                if (isBorder) {
+                    row.push('cliff');
+                } else if (rng() < 0.08) {
+                    row.push('rock');
+                } else if (rng() < 0.12) {
+                    row.push('dune');
+                } else {
+                    row.push('plain');
+                }
+            }
+            terrain.push(row);
+        }
+
+        // Clear a safe zone in the center of the first chunk
+        if (chunkX === 0 && chunkY === 0) {
+            const mid = Math.floor(size / 2);
+            for (let dy = -2; dy <= 2; dy++) {
+                for (let dx = -2; dx <= 2; dx++) {
+                    terrain[mid + dy][mid + dx] = 'plain';
+                }
+            }
+        }
+
+        return {
+            x: chunkX,
+            y: chunkY,
+            terrain,
+            seed: this.worldSeed
+        };
+    }
+
+    getChunk(chunkX, chunkY) {
+        const key = `${chunkX},${chunkY}`;
+        if (!this.loadedChunks.has(key)) {
+            this.loadedChunks.set(key, this._generateChunk(chunkX, chunkY));
+        }
+        return this.loadedChunks.get(key);
+    }
+
+    getChunkAt(worldX, worldY) {
+        const chunkX = Math.floor(worldX / (this.chunkSize * this.tileSize));
+        const chunkY = Math.floor(worldY / (this.chunkSize * this.tileSize));
+        return this.getChunk(chunkX, chunkY);
+    }
+
+    getSurroundingChunks(worldX, worldY, radius = 1) {
+        const cx = Math.floor(worldX / (this.chunkSize * this.tileSize));
+        const cy = Math.floor(worldY / (this.chunkSize * this.tileSize));
+        const chunks = [];
+        for (let dy = -radius; dy <= radius; dy++) {
+            for (let dx = -radius; dx <= radius; dx++) {
+                chunks.push(this.getChunk(cx + dx, cy + dy));
+            }
+        }
+        return chunks;
+    }
+
+    unloadDistant(worldX, worldY, maxDistance = 3) {
+        const cx = Math.floor(worldX / (this.chunkSize * this.tileSize));
+        const cy = Math.floor(worldY / (this.chunkSize * this.tileSize));
+        for (const key of this.loadedChunks.keys()) {
+            const [kx, ky] = key.split(',').map(Number);
+            if (Math.max(Math.abs(kx - cx), Math.abs(ky - cy)) > maxDistance) {
+                this.loadedChunks.delete(key);
+            }
+        }
+    }
+
+    isWalkable(worldX, worldY) {
+        const chunkPixels = this.chunkSize * this.tileSize;
+        const chunkX = Math.floor(worldX / chunkPixels);
+        const chunkY = Math.floor(worldY / chunkPixels);
+        const chunk = this.getChunk(chunkX, chunkY);
+
+        const localX = Math.floor((worldX - chunkX * chunkPixels) / this.tileSize);
+        const localY = Math.floor((worldY - chunkY * chunkPixels) / this.tileSize);
+
+        if (localY < 0 || localY >= this.chunkSize || localX < 0 || localX >= this.chunkSize) {
+            return false;
+        }
+
+        const tile = chunk.terrain[localY][localX];
+        return tile !== 'cliff' && tile !== 'rock';
+    }
+
+    // Build a map-compatible object for TileRenderer
+    buildMapView(worldX, worldY, radius = 1) {
+        const chunkPixels = this.chunkSize * this.tileSize;
+        const cx = Math.floor(worldX / chunkPixels);
+        const cy = Math.floor(worldY / chunkPixels);
+
+        const minCx = cx - radius;
+        const minCy = cy - radius;
+        const span = radius * 2 + 1;
+        const totalCols = span * this.chunkSize;
+        const totalRows = span * this.chunkSize;
+
+        const grid = [];
+        for (let row = 0; row < totalRows; row++) grid.push(new Array(totalCols).fill(0));
+
+        for (let dy = -radius; dy <= radius; dy++) {
+            for (let dx = -radius; dx <= radius; dx++) {
+                const chunk = this.getChunk(cx + dx, cy + dy);
+                const baseCol = (dx + radius) * this.chunkSize;
+                const baseRow = (dy + radius) * this.chunkSize;
+
+                for (let ty = 0; ty < this.chunkSize; ty++) {
+                    for (let tx = 0; tx < this.chunkSize; tx++) {
+                        const tile = chunk.terrain[ty][tx];
+                        grid[baseRow + ty][baseCol + tx] = tile === 'cliff' || tile === 'rock' ? 1 : 0;
+                    }
+                }
+            }
+        }
+
+        return {
+            grid,
+            width: totalCols,
+            height: totalRows,
+            tileSize: this.tileSize,
+            // Offset so TileRenderer camera math aligns with world coords
+            originX: minCx * chunkPixels,
+            originY: minCy * chunkPixels
+        };
+    }
+}
+
+// ─── ChunkRenderer ────────────────────────────────────────────────────────────
+
+const TERRAIN_COLORS = {
+    plain: '#1e2a3a',
+    dune:  '#3b2f1e',
+    rock:  '#2e2e3e',
+    cliff: '#4a4a5e'
+};
+
+class ChunkRenderer {
+    constructor(renderer) {
+        this.renderer = renderer;
+    }
+
+    render(chunks, chunkSize, tileSize) {
+        const ctx = this.renderer.ctx;
+        const cam = this.renderer.camera;
+        const chunkPixels = chunkSize * tileSize;
+
+        for (const chunk of chunks) {
+            const chunkWorldX = chunk.x * chunkPixels;
+            const chunkWorldY = chunk.y * chunkPixels;
+
+            for (let ty = 0; ty < chunkSize; ty++) {
+                for (let tx = 0; tx < chunkSize; tx++) {
+                    const tile = chunk.terrain[ty][tx];
+                    const screenX = chunkWorldX + tx * tileSize - cam.x;
+                    const screenY = chunkWorldY + ty * tileSize - cam.y;
+
+                    // Cull off-screen tiles
+                    if (
+                        screenX + tileSize < 0 || screenX > this.renderer.canvas.width ||
+                        screenY + tileSize < 0 || screenY > this.renderer.canvas.height
+                    ) continue;
+
+                    ctx.fillStyle = TERRAIN_COLORS[tile] || TERRAIN_COLORS.plain;
+                    ctx.fillRect(screenX, screenY, tileSize, tileSize);
+
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(screenX, screenY, tileSize, tileSize);
+                }
+            }
+        }
+    }
+}
+
+// ─── InputHandler ─────────────────────────────────────────────────────────────
 
 class InputHandler {
     constructor() {
@@ -8,19 +214,14 @@ class InputHandler {
     }
 
     bindEvents() {
-        window.addEventListener('keydown', (e) => {
-            this.keys[e.key.toLowerCase()] = true;
-        });
-
-        window.addEventListener('keyup', (e) => {
-            this.keys[e.key.toLowerCase()] = false;
-        });
+        window.addEventListener('keydown', (e) => { this.keys[e.key.toLowerCase()] = true; });
+        window.addEventListener('keyup',   (e) => { this.keys[e.key.toLowerCase()] = false; });
     }
 
-    isPressed(key) {
-        return !!this.keys[key.toLowerCase()];
-    }
+    isPressed(key) { return !!this.keys[key.toLowerCase()]; }
 }
+
+// ─── Player ───────────────────────────────────────────────────────────────────
 
 class Player {
     constructor(x, y) {
@@ -37,7 +238,7 @@ class Player {
         this.angle = 0;
     }
 
-    update(input, deltaTime, map) {
+    update(input, deltaTime, chunkManager) {
         this.velocity.x = 0;
         this.velocity.y = 0;
 
@@ -46,10 +247,7 @@ class Player {
         if (input.isPressed('a')) this.velocity.x -= 1;
         if (input.isPressed('d')) this.velocity.x += 1;
 
-        const magnitude = Math.sqrt(
-            this.velocity.x ** 2 + this.velocity.y ** 2
-        );
-
+        const magnitude = Math.sqrt(this.velocity.x ** 2 + this.velocity.y ** 2);
         if (magnitude > 0) {
             this.velocity.x = (this.velocity.x / magnitude) * this.speed;
             this.velocity.y = (this.velocity.y / magnitude) * this.speed;
@@ -60,18 +258,17 @@ class Player {
         const nextX = this.x + this.velocity.x * dt;
         const nextY = this.y + this.velocity.y * dt;
 
-        if (map) {
-            const canMoveX = map.isWalkable(nextX, this.y);
-            const canMoveY = map.isWalkable(this.x, nextY);
-
-            if (canMoveX) this.x = nextX;
-            if (canMoveY) this.y = nextY;
+        if (chunkManager) {
+            if (chunkManager.isWalkable(nextX, this.y)) this.x = nextX;
+            if (chunkManager.isWalkable(this.x, nextY)) this.y = nextY;
         } else {
             this.x = nextX;
             this.y = nextY;
         }
     }
 }
+
+// ─── Renderer ─────────────────────────────────────────────────────────────────
 
 class Renderer {
     constructor(canvas) {
@@ -87,7 +284,7 @@ class Renderer {
     }
 
     clear() {
-        this.ctx.fillStyle = '#1a1a2e';
+        this.ctx.fillStyle = '#111';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     }
 
@@ -99,7 +296,6 @@ class Renderer {
     drawCircle(x, y, radius, color) {
         const screenX = x - this.camera.x;
         const screenY = y - this.camera.y;
-
         this.ctx.beginPath();
         this.ctx.arc(screenX, screenY, radius, 0, Math.PI * 2);
         this.ctx.fillStyle = color;
@@ -107,6 +303,8 @@ class Renderer {
         this.ctx.closePath();
     }
 }
+
+// ─── GameState ────────────────────────────────────────────────────────────────
 
 class GameState {
     constructor(player) {
@@ -119,7 +317,7 @@ class GameState {
         this.particles = [];
         this.projectiles = [];
         this.enemies = [];
-        this.map = null;
+        this.chunkManager = null;
         this.timeScale = 1;
         this.cameraShake = false;
         this.ghostsVisible = false;
@@ -140,9 +338,7 @@ class GameState {
                 break;
         }
 
-        setTimeout(() => {
-            this._revertEffect(effect);
-        }, duration);
+        setTimeout(() => this._revertEffect(effect), duration);
     }
 
     _recalculateSpeed() {
@@ -171,16 +367,23 @@ class GameState {
         this.particles = this.particles.filter(p => (now - p.created) < p.duration);
 
         this.projectiles = this.projectiles.filter(p => {
-            p.x += p.vx;
-            p.y += p.vy;
+            const dt = deltaTime / 16;
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
             return (now - p.created) < 2000;
         });
 
         this.ghosts.forEach(ghost => {
-            ghost.update(this.player, this.map, deltaTime);
+            ghost.update(this.player, this.chunkManager, deltaTime);
         });
+
+        if (this.chunkManager) {
+            this.chunkManager.unloadDistant(this.player.x, this.player.y);
+        }
     }
 }
+
+// ─── Game ─────────────────────────────────────────────────────────────────────
 
 class Game {
     constructor() {
@@ -188,44 +391,43 @@ class Game {
         this.renderer = new Renderer(this.canvas);
         this.input = new InputHandler();
 
-        const map = new Map(30, 30, 50);
-        map.generateSimpleMap(30, 30);
-
-        const startX = Math.floor(map.width / 2) * map.tileSize + map.tileSize / 2;
-        const startY = Math.floor(map.height / 2) * map.tileSize + map.tileSize / 2;
+        const chunkManager = new ChunkManager(32, 50);
+        const chunkPixels = chunkManager.chunkSize * chunkManager.tileSize;
+        const mid = Math.floor(chunkManager.chunkSize / 2);
+        const startX = mid * chunkManager.tileSize + chunkManager.tileSize / 2;
+        const startY = mid * chunkManager.tileSize + chunkManager.tileSize / 2;
 
         const player = new Player(startX, startY);
         this.gameState = new GameState(player);
-        this.gameState.map = map;
+        this.gameState.chunkManager = chunkManager;
 
-        this.tileRenderer = new TileRenderer(this.renderer);
+        this.chunkRenderer = new ChunkRenderer(this.renderer);
 
         this.lastTime = null;
 
         this.bindEvents();
-        requestAnimationFrame((timestamp) => this.loop(timestamp));
+        requestAnimationFrame((ts) => this.loop(ts));
     }
 
     bindEvents() {
-        window.addEventListener('resize', () => {
-            this.renderer.resize();
-        });
+        window.addEventListener('resize', () => this.renderer.resize());
     }
 
     update(deltaTime) {
         const scaledDelta = deltaTime * this.gameState.timeScale;
-        this.gameState.player.update(this.input, scaledDelta, this.gameState.map);
+        this.gameState.player.update(this.input, scaledDelta, this.gameState.chunkManager);
         this.gameState.update(scaledDelta);
     }
 
     render() {
-        const { player, ghosts, particles, projectiles, map } = this.gameState;
+        const { player, ghosts, particles, projectiles, chunkManager } = this.gameState;
 
         this.renderer.clear();
         this.renderer.setCamera(player.x, player.y);
 
-        if (map) {
-            this.tileRenderer.render(map);
+        if (chunkManager) {
+            const chunks = chunkManager.getSurroundingChunks(player.x, player.y, 1);
+            this.chunkRenderer.render(chunks, chunkManager.chunkSize, chunkManager.tileSize);
         }
 
         ghosts.forEach(ghost => {
@@ -240,12 +442,7 @@ class Game {
             this.renderer.drawCircle(p.x, p.y, 5, 'rgba(255, 255, 100, 0.9)');
         });
 
-        this.renderer.drawCircle(
-            player.x,
-            player.y,
-            player.radius,
-            '#e94560'
-        );
+        this.renderer.drawCircle(player.x, player.y, player.radius, '#e94560');
     }
 
     loop(timestamp) {
@@ -260,6 +457,4 @@ class Game {
     }
 }
 
-window.addEventListener('DOMContentLoaded', () => {
-    new Game();
-});
+window.addEventListener('DOMContentLoaded', () => { new Game(); });
