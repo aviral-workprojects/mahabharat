@@ -1,3 +1,6 @@
+import Map from './map.js';
+import TileRenderer from './tileRenderer.js';
+
 class InputHandler {
     constructor() {
         this.keys = {};
@@ -25,6 +28,8 @@ class Player {
         this.y = y;
         this.velocity = { x: 0, y: 0 };
         this.speed = 5;
+        this.baseSpeed = 5;
+        this.speedModifiers = [];
         this.radius = 20;
         this.health = 100;
         this.maxHealth = 100;
@@ -32,7 +37,7 @@ class Player {
         this.angle = 0;
     }
 
-    update(input, deltaTime) {
+    update(input, deltaTime, map) {
         this.velocity.x = 0;
         this.velocity.y = 0;
 
@@ -52,8 +57,19 @@ class Player {
         }
 
         const dt = deltaTime / 16;
-        this.x += this.velocity.x * dt;
-        this.y += this.velocity.y * dt;
+        const nextX = this.x + this.velocity.x * dt;
+        const nextY = this.y + this.velocity.y * dt;
+
+        if (map) {
+            const canMoveX = map.isWalkable(nextX, this.y);
+            const canMoveY = map.isWalkable(this.x, nextY);
+
+            if (canMoveX) this.x = nextX;
+            if (canMoveY) this.y = nextY;
+        } else {
+            this.x = nextX;
+            this.y = nextY;
+        }
     }
 }
 
@@ -90,29 +106,6 @@ class Renderer {
         this.ctx.fill();
         this.ctx.closePath();
     }
-
-    drawGrid() {
-        const gridSize = 50;
-        const offsetX = -this.camera.x % gridSize;
-        const offsetY = -this.camera.y % gridSize;
-
-        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-        this.ctx.lineWidth = 1;
-
-        for (let x = offsetX; x < this.canvas.width; x += gridSize) {
-            this.ctx.beginPath();
-            this.ctx.moveTo(x, 0);
-            this.ctx.lineTo(x, this.canvas.height);
-            this.ctx.stroke();
-        }
-
-        for (let y = offsetY; y < this.canvas.height; y += gridSize) {
-            this.ctx.beginPath();
-            this.ctx.moveTo(0, y);
-            this.ctx.lineTo(this.canvas.width, y);
-            this.ctx.stroke();
-        }
-    }
 }
 
 class GameState {
@@ -139,7 +132,8 @@ class GameState {
 
         switch (type) {
             case 'speed':
-                this.player.speed *= multiplier;
+                this.player.speedModifiers.push(multiplier);
+                this._recalculateSpeed();
                 break;
             case 'lightRadius':
                 this.lighting.lightRadius *= multiplier;
@@ -151,11 +145,19 @@ class GameState {
         }, duration);
     }
 
+    _recalculateSpeed() {
+        const total = this.player.speedModifiers.reduce((a, b) => a * b, 1);
+        this.player.speed = this.player.baseSpeed * total;
+    }
+
     _revertEffect(effect) {
         switch (effect.type) {
-            case 'speed':
-                this.player.speed /= effect.multiplier;
+            case 'speed': {
+                const idx = this.player.speedModifiers.indexOf(effect.multiplier);
+                if (idx !== -1) this.player.speedModifiers.splice(idx, 1);
+                this._recalculateSpeed();
                 break;
+            }
             case 'lightRadius':
                 this.lighting.lightRadius /= effect.multiplier;
                 break;
@@ -166,9 +168,7 @@ class GameState {
     update(deltaTime) {
         const now = Date.now();
 
-        this.particles = this.particles.filter(p => {
-            return (now - p.created) < p.duration;
-        });
+        this.particles = this.particles.filter(p => (now - p.created) < p.duration);
 
         this.projectiles = this.projectiles.filter(p => {
             p.x += p.vx;
@@ -188,8 +188,17 @@ class Game {
         this.renderer = new Renderer(this.canvas);
         this.input = new InputHandler();
 
-        const player = new Player(0, 0);
+        const map = new Map(30, 30, 50);
+        map.generateSimpleMap(30, 30);
+
+        const startX = Math.floor(map.width / 2) * map.tileSize + map.tileSize / 2;
+        const startY = Math.floor(map.height / 2) * map.tileSize + map.tileSize / 2;
+
+        const player = new Player(startX, startY);
         this.gameState = new GameState(player);
+        this.gameState.map = map;
+
+        this.tileRenderer = new TileRenderer(this.renderer);
 
         this.lastTime = null;
 
@@ -205,16 +214,19 @@ class Game {
 
     update(deltaTime) {
         const scaledDelta = deltaTime * this.gameState.timeScale;
-        this.gameState.player.update(this.input, scaledDelta);
+        this.gameState.player.update(this.input, scaledDelta, this.gameState.map);
         this.gameState.update(scaledDelta);
     }
 
     render() {
-        const { player, ghosts, particles, projectiles } = this.gameState;
+        const { player, ghosts, particles, projectiles, map } = this.gameState;
 
         this.renderer.clear();
         this.renderer.setCamera(player.x, player.y);
-        this.renderer.drawGrid();
+
+        if (map) {
+            this.tileRenderer.render(map);
+        }
 
         ghosts.forEach(ghost => {
             if (ghost.render) ghost.render(this.renderer);
