@@ -70,14 +70,9 @@ class ChunkManager {
         const chunkX = Math.floor(worldX / chunkPixels);
         const chunkY = Math.floor(worldY / chunkPixels);
         const chunk = this.getChunk(chunkX, chunkY);
-
         const localX = Math.floor((worldX - chunkX * chunkPixels) / this.tileSize);
         const localY = Math.floor((worldY - chunkY * chunkPixels) / this.tileSize);
-
-        if (localY < 0 || localY >= this.chunkSize || localX < 0 || localX >= this.chunkSize) {
-            return 'cliff';
-        }
-
+        if (localY < 0 || localY >= this.chunkSize || localX < 0 || localX >= this.chunkSize) return 'cliff';
         return chunk.terrain[localY][localX];
     }
 
@@ -114,11 +109,9 @@ class ChunkManager {
         const cx = Math.floor(worldX / chunkPixels);
         const cy = Math.floor(worldY / chunkPixels);
         const chunks = [];
-        for (let dy = -radius; dy <= radius; dy++) {
-            for (let dx = -radius; dx <= radius; dx++) {
+        for (let dy = -radius; dy <= radius; dy++)
+            for (let dx = -radius; dx <= radius; dx++)
                 chunks.push(this.getChunk(cx + dx, cy + dy));
-            }
-        }
         return chunks;
     }
 
@@ -128,9 +121,8 @@ class ChunkManager {
         const cy = Math.floor(worldY / chunkPixels);
         for (const key of this.loadedChunks.keys()) {
             const [kx, ky] = key.split(',').map(Number);
-            if (Math.max(Math.abs(kx - cx), Math.abs(ky - cy)) > maxDistance) {
+            if (Math.max(Math.abs(kx - cx), Math.abs(ky - cy)) > maxDistance)
                 this.loadedChunks.delete(key);
-            }
         }
     }
 }
@@ -145,9 +137,7 @@ const TERRAIN_COLORS = {
 };
 
 class ChunkRenderer {
-    constructor(renderer) {
-        this.renderer = renderer;
-    }
+    constructor(renderer) { this.renderer = renderer; }
 
     render(chunks, chunkSize, tileSize) {
         const ctx = this.renderer.ctx;
@@ -157,21 +147,15 @@ class ChunkRenderer {
         for (const chunk of chunks) {
             const chunkWorldX = chunk.x * chunkPixels;
             const chunkWorldY = chunk.y * chunkPixels;
-
             for (let ty = 0; ty < chunkSize; ty++) {
                 for (let tx = 0; tx < chunkSize; tx++) {
                     const tile = chunk.terrain[ty][tx];
                     const screenX = chunkWorldX + tx * tileSize - cam.x;
                     const screenY = chunkWorldY + ty * tileSize - cam.y;
-
-                    if (
-                        screenX + tileSize < 0 || screenX > this.renderer.canvas.width ||
-                        screenY + tileSize < 0 || screenY > this.renderer.canvas.height
-                    ) continue;
-
+                    if (screenX + tileSize < 0 || screenX > this.renderer.canvas.width ||
+                        screenY + tileSize < 0 || screenY > this.renderer.canvas.height) continue;
                     ctx.fillStyle = TERRAIN_COLORS[tile] || TERRAIN_COLORS.plain;
                     ctx.fillRect(screenX, screenY, tileSize, tileSize);
-
                     ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
                     ctx.lineWidth = 1;
                     ctx.strokeRect(screenX, screenY, tileSize, tileSize);
@@ -233,16 +217,9 @@ class Player {
         const dt = deltaTime / 16;
         const nextX = this.x + this.velocity.x * dt;
         const nextY = this.y + this.velocity.y * dt;
-
-        const terrainModifier = chunkManager
-            ? chunkManager.getMovementModifier(nextX, nextY)
-            : 1.0;
-
-        const moveX = this.velocity.x * dt * terrainModifier;
-        const moveY = this.velocity.y * dt * terrainModifier;
-
-        const finalX = this.x + moveX;
-        const finalY = this.y + moveY;
+        const terrainModifier = chunkManager ? chunkManager.getMovementModifier(nextX, nextY) : 1.0;
+        const finalX = this.x + this.velocity.x * dt * terrainModifier;
+        const finalY = this.y + this.velocity.y * dt * terrainModifier;
 
         if (chunkManager) {
             if (chunkManager.isWalkable(finalX, this.y)) this.x = finalX;
@@ -261,6 +238,7 @@ class Renderer {
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d');
         this.camera = { x: 0, y: 0 };
+        this._shake = { x: 0, y: 0, magnitude: 0, decay: 0.85 };
         this.resize();
     }
 
@@ -269,14 +247,31 @@ class Renderer {
         this.canvas.height = window.innerHeight;
     }
 
+    triggerShake(magnitude = 8) {
+        this._shake.magnitude = magnitude;
+    }
+
+    _updateShake() {
+        if (this._shake.magnitude > 0.1) {
+            this._shake.x = (Math.random() * 2 - 1) * this._shake.magnitude;
+            this._shake.y = (Math.random() * 2 - 1) * this._shake.magnitude;
+            this._shake.magnitude *= this._shake.decay;
+        } else {
+            this._shake.magnitude = 0;
+            this._shake.x = 0;
+            this._shake.y = 0;
+        }
+    }
+
     clear() {
         this.ctx.fillStyle = '#111';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     }
 
     setCamera(targetX, targetY) {
-        this.camera.x = targetX - this.canvas.width / 2;
-        this.camera.y = targetY - this.canvas.height / 2;
+        this._updateShake();
+        this.camera.x = targetX - this.canvas.width / 2 + this._shake.x;
+        this.camera.y = targetY - this.canvas.height / 2 + this._shake.y;
     }
 
     drawCircle(x, y, radius, color) {
@@ -287,6 +282,42 @@ class Renderer {
         this.ctx.fillStyle = color;
         this.ctx.fill();
         this.ctx.closePath();
+    }
+
+    drawDamageFlash(alpha) {
+        if (alpha <= 0) return;
+        this.ctx.save();
+        this.ctx.globalCompositeOperation = 'source-over';
+        this.ctx.fillStyle = `rgba(220, 30, 30, ${alpha})`;
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        this.ctx.restore();
+    }
+
+    drawGameOver() {
+        const ctx = this.ctx;
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-over';
+
+        // Dark backdrop
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillRect(0, 0, w, h);
+
+        // "Game Over" title
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = 'bold 72px sans-serif';
+        ctx.fillStyle = '#cc2222';
+        ctx.fillText('GAME OVER', w / 2, h / 2 - 30);
+
+        // Subtitle
+        ctx.font = '24px sans-serif';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+        ctx.fillText('Refresh to try again', w / 2, h / 2 + 40);
+
+        ctx.restore();
     }
 }
 
@@ -305,12 +336,19 @@ class GameState {
         this.cameraShake = false;
         this.ghostsVisible = false;
         this.activeEffects = [];
+
+        // Feedback state
+        this.damageFlashAlpha = 0;
+        this.isGameOver = false;
+    }
+
+    triggerDamageFlash() {
+        this.damageFlashAlpha = 0.55;
     }
 
     applyEffect({ type, multiplier, duration }) {
         const effect = { type, multiplier, duration, startedAt: Date.now() };
         this.activeEffects.push(effect);
-
         switch (type) {
             case 'speed':
                 this.player.speedModifiers.push(multiplier);
@@ -320,7 +358,6 @@ class GameState {
                 if (this.lighting) this.lighting.lightRadius *= multiplier;
                 break;
         }
-
         setTimeout(() => this._revertEffect(effect), duration);
     }
 
@@ -344,9 +381,16 @@ class GameState {
         this.activeEffects = this.activeEffects.filter(e => e !== effect);
     }
 
-    update(deltaTime) {
+    update(deltaTime, renderer) {
+        if (this.isGameOver) return;
+
         const now = Date.now();
         const player = this.player;
+
+        // Decay damage flash
+        if (this.damageFlashAlpha > 0) {
+            this.damageFlashAlpha = Math.max(0, this.damageFlashAlpha - (deltaTime / 16) * 0.06);
+        }
 
         this.particles = this.particles.filter(p => (now - p.created) < p.duration);
 
@@ -366,8 +410,14 @@ class GameState {
                 const dmg = ghost.attack(player);
                 if (dmg > 0) {
                     player.health = Math.max(0, player.health - dmg);
+                    this.triggerDamageFlash();
+                    renderer.triggerShake(7);
                 }
             }
+        }
+
+        if (player.health <= 0) {
+            this.isGameOver = true;
         }
 
         if (this.lighting) {
@@ -392,14 +442,9 @@ function spawnGhosts(count, playerX, playerY, chunkManager) {
         const dist  = minDist + Math.random() * (maxDist - minDist);
         const wx    = playerX + Math.cos(angle) * dist;
         const wy    = playerY + Math.sin(angle) * dist;
+        const pos   = chunkManager.findWalkableNear(wx, wy);
 
-        const pos = chunkManager.findWalkableNear(wx, wy);
-
-        const ghost = new Ghost(pos.x, pos.y, {
-            speed:  2 + Math.random(),
-            health: 30,
-            damage: 8
-        });
+        const ghost = new Ghost(pos.x, pos.y, { speed: 2 + Math.random(), health: 30, damage: 8 });
         ghost.setAI(new BasicAI({ detectionRange: 350, stopDistance: 22 }));
         ghosts.push(ghost);
     }
@@ -433,7 +478,6 @@ class Game {
         this.gameState.ghosts = spawnGhosts(4, startX, startY, chunkManager);
 
         this.chunkRenderer = new ChunkRenderer(this.renderer);
-
         this.lastTime = null;
 
         this.bindEvents();
@@ -445,13 +489,15 @@ class Game {
     }
 
     update(deltaTime) {
+        if (this.gameState.isGameOver) return;
         const scaledDelta = deltaTime * this.gameState.timeScale;
         this.gameState.player.update(this.input, scaledDelta, this.gameState.chunkManager);
-        this.gameState.update(scaledDelta);
+        this.gameState.update(scaledDelta, this.renderer);
     }
 
     render() {
-        const { player, ghosts, particles, projectiles, chunkManager, lighting } = this.gameState;
+        const { player, ghosts, particles, projectiles, chunkManager, lighting,
+                damageFlashAlpha, isGameOver } = this.gameState;
 
         this.renderer.clear();
         this.renderer.setCamera(player.x, player.y);
@@ -473,17 +519,19 @@ class Game {
         });
 
         // 4. Ghosts
-        ghosts.forEach(ghost => {
-            if (ghost.render) ghost.render(this.renderer);
-        });
+        ghosts.forEach(ghost => { if (ghost.render) ghost.render(this.renderer); });
 
         // 5. Player
         this.renderer.drawCircle(player.x, player.y, player.radius, '#e94560');
 
-        // 6. Lighting — last, composited over everything
-        if (lighting) {
-            lighting.render(player);
-        }
+        // 6. Lighting (fog of war)
+        if (lighting) lighting.render(player);
+
+        // 7. Damage flash (screen-space, over lighting)
+        this.renderer.drawDamageFlash(damageFlashAlpha);
+
+        // 8. Game over overlay (topmost)
+        if (isGameOver) this.renderer.drawGameOver();
     }
 
     loop(timestamp) {
