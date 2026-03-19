@@ -1,4 +1,5 @@
-import TileRenderer from './tileRenderer.js';
+import Ghost from './ghost.js';
+import BasicAI from './ai_basic.js';
 
 // ─── ChunkManager ─────────────────────────────────────────────────────────────
 
@@ -93,6 +94,18 @@ class ChunkManager {
             case 'cliff': return 0.0;
             default:      return 1.0;
         }
+    }
+
+    findWalkableNear(worldX, worldY, searchRadius = 300) {
+        const step = this.tileSize;
+        for (let r = step; r <= searchRadius; r += step) {
+            for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 8) {
+                const tx = worldX + Math.cos(angle) * r;
+                const ty = worldY + Math.sin(angle) * r;
+                if (this.isWalkable(tx, ty)) return { x: tx, y: ty };
+            }
+        }
+        return { x: worldX, y: worldY };
     }
 
     getSurroundingChunks(worldX, worldY, radius = 1) {
@@ -217,22 +230,25 @@ class Player {
         }
 
         const dt = deltaTime / 16;
+        const nextX = this.x + this.velocity.x * dt;
+        const nextY = this.y + this.velocity.y * dt;
+
         const terrainModifier = chunkManager
-            ? chunkManager.getMovementModifier(this.x, this.y)
+            ? chunkManager.getMovementModifier(nextX, nextY)
             : 1.0;
 
         const moveX = this.velocity.x * dt * terrainModifier;
         const moveY = this.velocity.y * dt * terrainModifier;
 
-        const nextX = this.x + moveX;
-        const nextY = this.y + moveY;
+        const finalX = this.x + moveX;
+        const finalY = this.y + moveY;
 
         if (chunkManager) {
-            if (chunkManager.isWalkable(nextX, this.y)) this.x = nextX;
-            if (chunkManager.isWalkable(this.x, nextY)) this.y = nextY;
+            if (chunkManager.isWalkable(finalX, this.y)) this.x = finalX;
+            if (chunkManager.isWalkable(this.x, finalY)) this.y = finalY;
         } else {
-            this.x = nextX;
-            this.y = nextY;
+            this.x = finalX;
+            this.y = finalY;
         }
     }
 }
@@ -332,6 +348,7 @@ class GameState {
 
     update(deltaTime) {
         const now = Date.now();
+        const player = this.player;
 
         this.particles = this.particles.filter(p => (now - p.created) < p.duration);
 
@@ -342,14 +359,50 @@ class GameState {
             return (now - p.created) < 2000;
         });
 
-        this.ghosts.forEach(ghost => {
-            ghost.update(this.player, this.chunkManager, deltaTime);
-        });
+        this.ghosts = this.ghosts.filter(ghost => ghost.health > 0);
+
+        for (const ghost of this.ghosts) {
+            ghost.update(player, this.chunkManager, deltaTime);
+
+            if (!player.invulnerable) {
+                const dmg = ghost.attack(player);
+                if (dmg > 0) {
+                    player.health = Math.max(0, player.health - dmg);
+                }
+            }
+        }
 
         if (this.chunkManager) {
-            this.chunkManager.unloadDistant(this.player.x, this.player.y);
+            this.chunkManager.unloadDistant(player.x, player.y);
         }
     }
+}
+
+// ─── Ghost spawner ────────────────────────────────────────────────────────────
+
+function spawnGhosts(count, playerX, playerY, chunkManager) {
+    const ghosts = [];
+    const minDist = 300;
+    const maxDist = 600;
+
+    for (let i = 0; i < count; i++) {
+        const angle = (i / count) * Math.PI * 2;
+        const dist  = minDist + Math.random() * (maxDist - minDist);
+        const wx    = playerX + Math.cos(angle) * dist;
+        const wy    = playerY + Math.sin(angle) * dist;
+
+        const pos = chunkManager.findWalkableNear(wx, wy);
+
+        const ghost = new Ghost(pos.x, pos.y, {
+            speed:  2 + Math.random(),
+            health: 30,
+            damage: 8
+        });
+        ghost.setAI(new BasicAI({ detectionRange: 350, stopDistance: 22 }));
+        ghosts.push(ghost);
+    }
+
+    return ghosts;
 }
 
 // ─── Game ─────────────────────────────────────────────────────────────────────
@@ -361,13 +414,17 @@ class Game {
         this.input = new InputHandler();
 
         const chunkManager = new ChunkManager(32, 50);
-        const mid = Math.floor(chunkManager.chunkSize / 2);
+        const mid    = Math.floor(chunkManager.chunkSize / 2);
         const startX = mid * chunkManager.tileSize + chunkManager.tileSize / 2;
         const startY = mid * chunkManager.tileSize + chunkManager.tileSize / 2;
 
         const player = new Player(startX, startY);
         this.gameState = new GameState(player);
         this.gameState.chunkManager = chunkManager;
+
+        // Ensure starting chunk is generated before spawning ghosts
+        chunkManager.getSurroundingChunks(startX, startY, 2);
+        this.gameState.ghosts = spawnGhosts(4, startX, startY, chunkManager);
 
         this.chunkRenderer = new ChunkRenderer(this.renderer);
 
@@ -393,23 +450,28 @@ class Game {
         this.renderer.clear();
         this.renderer.setCamera(player.x, player.y);
 
+        // 1. Terrain
         if (chunkManager) {
             const chunks = chunkManager.getSurroundingChunks(player.x, player.y, 1);
             this.chunkRenderer.render(chunks, chunkManager.chunkSize, chunkManager.tileSize);
         }
 
-        ghosts.forEach(ghost => {
-            if (ghost.render) ghost.render(this.renderer);
-        });
-
+        // 2. Particles
         particles.forEach(p => {
             this.renderer.drawCircle(p.x, p.y, p.radius * 0.3, 'rgba(255, 200, 100, 0.4)');
         });
 
+        // 3. Projectiles
         projectiles.forEach(p => {
             this.renderer.drawCircle(p.x, p.y, 5, 'rgba(255, 255, 100, 0.9)');
         });
 
+        // 4. Ghosts
+        ghosts.forEach(ghost => {
+            if (ghost.render) ghost.render(this.renderer);
+        });
+
+        // 5. Player (always on top)
         this.renderer.drawCircle(player.x, player.y, player.radius, '#e94560');
     }
 
