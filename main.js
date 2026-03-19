@@ -1,5 +1,6 @@
 import Ghost from './ghost.js';
 import BasicAI from './ai_basic.js';
+import Lighting from './lighting.js';
 
 // ─── ChunkManager ─────────────────────────────────────────────────────────────
 
@@ -295,10 +296,7 @@ class GameState {
     constructor(player) {
         this.player = player;
         this.ghosts = [];
-        this.lighting = {
-            lightRadius: 200,
-            darknessColor: 'rgba(0, 0, 0, 0.85)'
-        };
+        this.lighting = null;
         this.particles = [];
         this.projectiles = [];
         this.enemies = [];
@@ -319,7 +317,7 @@ class GameState {
                 this._recalculateSpeed();
                 break;
             case 'lightRadius':
-                this.lighting.lightRadius *= multiplier;
+                if (this.lighting) this.lighting.lightRadius *= multiplier;
                 break;
         }
 
@@ -340,7 +338,7 @@ class GameState {
                 break;
             }
             case 'lightRadius':
-                this.lighting.lightRadius /= effect.multiplier;
+                if (this.lighting) this.lighting.lightRadius /= effect.multiplier;
                 break;
         }
         this.activeEffects = this.activeEffects.filter(e => e !== effect);
@@ -370,6 +368,10 @@ class GameState {
                     player.health = Math.max(0, player.health - dmg);
                 }
             }
+        }
+
+        if (this.lighting) {
+            this.lighting.update(deltaTime);
         }
 
         if (this.chunkManager) {
@@ -421,8 +423,12 @@ class Game {
         const player = new Player(startX, startY);
         this.gameState = new GameState(player);
         this.gameState.chunkManager = chunkManager;
+        this.gameState.lighting = new Lighting(this.renderer, {
+            lightRadius:      200,
+            darknessColor:    'rgba(0, 0, 0, 0.85)',
+            flickerIntensity: 0.05
+        });
 
-        // Ensure starting chunk is generated before spawning ghosts
         chunkManager.getSurroundingChunks(startX, startY, 2);
         this.gameState.ghosts = spawnGhosts(4, startX, startY, chunkManager);
 
@@ -445,7 +451,7 @@ class Game {
     }
 
     render() {
-        const { player, ghosts, particles, projectiles, chunkManager } = this.gameState;
+        const { player, ghosts, particles, projectiles, chunkManager, lighting } = this.gameState;
 
         this.renderer.clear();
         this.renderer.setCamera(player.x, player.y);
@@ -471,8 +477,13 @@ class Game {
             if (ghost.render) ghost.render(this.renderer);
         });
 
-        // 5. Player (always on top)
+        // 5. Player
         this.renderer.drawCircle(player.x, player.y, player.radius, '#e94560');
+
+        // 6. Lighting — last, composited over everything
+        if (lighting) {
+            lighting.render(player);
+        }
     }
 
     loop(timestamp) {
