@@ -47,11 +47,9 @@ class ChunkManager {
 
         if (chunkX === 0 && chunkY === 0) {
             const mid = Math.floor(size / 2);
-            for (let dy = -2; dy <= 2; dy++) {
-                for (let dx = -2; dx <= 2; dx++) {
+            for (let dy = -2; dy <= 2; dy++)
+                for (let dx = -2; dx <= 2; dx++)
                     terrain[mid + dy][mid + dx] = 'plain';
-                }
-            }
         }
 
         return { x: chunkX, y: chunkY, terrain, seed: this.worldSeed };
@@ -59,9 +57,8 @@ class ChunkManager {
 
     getChunk(chunkX, chunkY) {
         const key = `${chunkX},${chunkY}`;
-        if (!this.loadedChunks.has(key)) {
+        if (!this.loadedChunks.has(key))
             this.loadedChunks.set(key, this._generateChunk(chunkX, chunkY));
-        }
         return this.loadedChunks.get(key);
     }
 
@@ -94,13 +91,12 @@ class ChunkManager {
 
     findWalkableNear(worldX, worldY, searchRadius = 300) {
         const step = this.tileSize;
-        for (let r = step; r <= searchRadius; r += step) {
+        for (let r = step; r <= searchRadius; r += step)
             for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 8) {
                 const tx = worldX + Math.cos(angle) * r;
                 const ty = worldY + Math.sin(angle) * r;
                 if (this.isWalkable(tx, ty)) return { x: tx, y: ty };
             }
-        }
         return { x: worldX, y: worldY };
     }
 
@@ -162,6 +158,113 @@ class ChunkRenderer {
                 }
             }
         }
+    }
+}
+
+// ─── HUD ──────────────────────────────────────────────────────────────────────
+
+class HUD {
+    constructor(renderer) {
+        this.renderer = renderer;
+    }
+
+    render(player, ghostCount, survivalSeconds) {
+        const ctx = this.renderer.ctx;
+        const w   = this.renderer.canvas.width;
+
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-over';
+
+        // ── Health bar (top-left) ──────────────────────────────────────────────
+        const barX      = 20;
+        const barY      = 20;
+        const barW      = 180;
+        const barH      = 16;
+        const healthPct = Math.max(0, player.health / player.maxHealth);
+
+        // Bar background
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        this._roundRect(ctx, barX - 2, barY - 2, barW + 4, barH + 4, 4);
+        ctx.fill();
+
+        // Empty track
+        ctx.fillStyle = 'rgba(80, 20, 20, 0.7)';
+        this._roundRect(ctx, barX, barY, barW, barH, 3);
+        ctx.fill();
+
+        // Filled portion — colour shifts red → orange → green
+        const r = Math.round(220 - healthPct * 80);
+        const g = Math.round(healthPct * 180);
+        ctx.fillStyle = `rgb(${r}, ${g}, 40)`;
+        if (healthPct > 0) {
+            this._roundRect(ctx, barX, barY, barW * healthPct, barH, 3);
+            ctx.fill();
+        }
+
+        // Label
+        ctx.font = 'bold 12px monospace';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText('HP', barX, barY + barH + 5);
+
+        ctx.textAlign = 'right';
+        ctx.fillText(`${Math.ceil(player.health)} / ${player.maxHealth}`, barX + barW, barY + barH + 5);
+
+        // ── Survival time (top-right) ─────────────────────────────────────────
+        const mins = String(Math.floor(survivalSeconds / 60)).padStart(2, '0');
+        const secs = String(Math.floor(survivalSeconds % 60)).padStart(2, '0');
+        const timeStr = `${mins}:${secs}`;
+
+        ctx.font = 'bold 20px monospace';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'top';
+
+        // Pill backdrop
+        const timeW = ctx.measureText(timeStr).width + 24;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        this._roundRect(ctx, w - timeW - 10, 14, timeW, 30, 6);
+        ctx.fill();
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+        ctx.fillText(timeStr, w - 22, 20);
+
+        // Label beneath
+        ctx.font = '10px monospace';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.fillText('SURVIVED', w - 22, 46);
+
+        // ── Ghost count (below health bar) ────────────────────────────────────
+        ctx.font = 'bold 12px monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+
+        const ghostLabel = `GHOSTS  ${ghostCount}`;
+        const ghostLabelW = ctx.measureText(ghostLabel).width + 16;
+
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        this._roundRect(ctx, 18, 60, ghostLabelW, 22, 4);
+        ctx.fill();
+
+        ctx.fillStyle = ghostCount > 0 ? 'rgba(200, 200, 255, 0.9)' : 'rgba(120, 220, 120, 0.9)';
+        ctx.fillText(ghostLabel, 26, 65);
+
+        ctx.restore();
+    }
+
+    // Minimal rounded-rect helper (no Path2D dependency)
+    _roundRect(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.arcTo(x + w, y,     x + w, y + r,     r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+        ctx.lineTo(x + r, y + h);
+        ctx.arcTo(x,     y + h, x,     y + h - r, r);
+        ctx.lineTo(x,     y + r);
+        ctx.arcTo(x,     y,     x + r, y,         r);
+        ctx.closePath();
     }
 }
 
@@ -301,18 +404,15 @@ class Renderer {
         ctx.save();
         ctx.globalCompositeOperation = 'source-over';
 
-        // Dark backdrop
         ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
         ctx.fillRect(0, 0, w, h);
 
-        // "Game Over" title
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.font = 'bold 72px sans-serif';
         ctx.fillStyle = '#cc2222';
         ctx.fillText('GAME OVER', w / 2, h / 2 - 30);
 
-        // Subtitle
         ctx.font = '24px sans-serif';
         ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
         ctx.fillText('Refresh to try again', w / 2, h / 2 + 40);
@@ -336,10 +436,9 @@ class GameState {
         this.cameraShake = false;
         this.ghostsVisible = false;
         this.activeEffects = [];
-
-        // Feedback state
         this.damageFlashAlpha = 0;
         this.isGameOver = false;
+        this.survivalTime = 0; // ms
     }
 
     triggerDamageFlash() {
@@ -384,13 +483,13 @@ class GameState {
     update(deltaTime, renderer) {
         if (this.isGameOver) return;
 
+        this.survivalTime += deltaTime;
+
         const now = Date.now();
         const player = this.player;
 
-        // Decay damage flash
-        if (this.damageFlashAlpha > 0) {
+        if (this.damageFlashAlpha > 0)
             this.damageFlashAlpha = Math.max(0, this.damageFlashAlpha - (deltaTime / 16) * 0.06);
-        }
 
         this.particles = this.particles.filter(p => (now - p.created) < p.duration);
 
@@ -405,7 +504,6 @@ class GameState {
 
         for (const ghost of this.ghosts) {
             ghost.update(player, this.chunkManager, deltaTime);
-
             if (!player.invulnerable) {
                 const dmg = ghost.attack(player);
                 if (dmg > 0) {
@@ -416,17 +514,11 @@ class GameState {
             }
         }
 
-        if (player.health <= 0) {
-            this.isGameOver = true;
-        }
+        if (player.health <= 0) this.isGameOver = true;
 
-        if (this.lighting) {
-            this.lighting.update(deltaTime);
-        }
+        if (this.lighting) this.lighting.update(deltaTime);
 
-        if (this.chunkManager) {
-            this.chunkManager.unloadDistant(player.x, player.y);
-        }
+        if (this.chunkManager) this.chunkManager.unloadDistant(player.x, player.y);
     }
 }
 
@@ -436,19 +528,17 @@ function spawnGhosts(count, playerX, playerY, chunkManager) {
     const ghosts = [];
     const minDist = 300;
     const maxDist = 600;
-
     for (let i = 0; i < count; i++) {
         const angle = (i / count) * Math.PI * 2;
         const dist  = minDist + Math.random() * (maxDist - minDist);
-        const wx    = playerX + Math.cos(angle) * dist;
-        const wy    = playerY + Math.sin(angle) * dist;
-        const pos   = chunkManager.findWalkableNear(wx, wy);
-
+        const pos   = chunkManager.findWalkableNear(
+            playerX + Math.cos(angle) * dist,
+            playerY + Math.sin(angle) * dist
+        );
         const ghost = new Ghost(pos.x, pos.y, { speed: 2 + Math.random(), health: 30, damage: 8 });
         ghost.setAI(new BasicAI({ detectionRange: 350, stopDistance: 22 }));
         ghosts.push(ghost);
     }
-
     return ghosts;
 }
 
@@ -478,6 +568,7 @@ class Game {
         this.gameState.ghosts = spawnGhosts(4, startX, startY, chunkManager);
 
         this.chunkRenderer = new ChunkRenderer(this.renderer);
+        this.hud = new HUD(this.renderer);
         this.lastTime = null;
 
         this.bindEvents();
@@ -496,8 +587,8 @@ class Game {
     }
 
     render() {
-        const { player, ghosts, particles, projectiles, chunkManager, lighting,
-                damageFlashAlpha, isGameOver } = this.gameState;
+        const { player, ghosts, particles, projectiles, chunkManager,
+                lighting, damageFlashAlpha, isGameOver, survivalTime } = this.gameState;
 
         this.renderer.clear();
         this.renderer.setCamera(player.x, player.y);
@@ -524,13 +615,18 @@ class Game {
         // 5. Player
         this.renderer.drawCircle(player.x, player.y, player.radius, '#e94560');
 
-        // 6. Lighting (fog of war)
+        // 6. Lighting / fog of war
         if (lighting) lighting.render(player);
 
-        // 7. Damage flash (screen-space, over lighting)
+        // 7. Damage flash
         this.renderer.drawDamageFlash(damageFlashAlpha);
 
-        // 8. Game over overlay (topmost)
+        // 8. HUD (above all gameplay, below game-over)
+        if (!isGameOver) {
+            this.hud.render(player, ghosts.length, survivalTime / 1000);
+        }
+
+        // 9. Game over overlay
         if (isGameOver) this.renderer.drawGameOver();
     }
 
