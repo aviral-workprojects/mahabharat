@@ -164,11 +164,9 @@ class ChunkRenderer {
 // ─── HUD ──────────────────────────────────────────────────────────────────────
 
 class HUD {
-    constructor(renderer) {
-        this.renderer = renderer;
-    }
+    constructor(renderer) { this.renderer = renderer; }
 
-    render(player, ghostCount, survivalSeconds) {
+    render(player, ghostCount, survivalSeconds, wave, waveCountdown) {
         const ctx = this.renderer.ctx;
         const w   = this.renderer.canvas.width;
 
@@ -182,17 +180,14 @@ class HUD {
         const barH      = 16;
         const healthPct = Math.max(0, player.health / player.maxHealth);
 
-        // Bar background
         ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
         this._roundRect(ctx, barX - 2, barY - 2, barW + 4, barH + 4, 4);
         ctx.fill();
 
-        // Empty track
         ctx.fillStyle = 'rgba(80, 20, 20, 0.7)';
         this._roundRect(ctx, barX, barY, barW, barH, 3);
         ctx.fill();
 
-        // Filled portion — colour shifts red → orange → green
         const r = Math.round(220 - healthPct * 80);
         const g = Math.round(healthPct * 180);
         ctx.fillStyle = `rgb(${r}, ${g}, 40)`;
@@ -201,58 +196,68 @@ class HUD {
             ctx.fill();
         }
 
-        // Label
         ctx.font = 'bold 12px monospace';
         ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
         ctx.fillText('HP', barX, barY + barH + 5);
-
         ctx.textAlign = 'right';
         ctx.fillText(`${Math.ceil(player.health)} / ${player.maxHealth}`, barX + barW, barY + barH + 5);
 
+        // ── Ghost count ────────────────────────────────────────────────────────
+        ctx.font = 'bold 12px monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        const ghostLabel = `GHOSTS  ${ghostCount}`;
+        const ghostLabelW = ctx.measureText(ghostLabel).width + 16;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        this._roundRect(ctx, 18, 60, ghostLabelW, 22, 4);
+        ctx.fill();
+        ctx.fillStyle = ghostCount > 0 ? 'rgba(200, 200, 255, 0.9)' : 'rgba(120, 220, 120, 0.9)';
+        ctx.fillText(ghostLabel, 26, 65);
+
+        // ── Wave indicator (below ghost count) ────────────────────────────────
+        const waveLabel = `WAVE  ${wave}`;
+        const waveLabelW = ctx.measureText(waveLabel).width + 16;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        this._roundRect(ctx, 18, 88, waveLabelW, 22, 4);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255, 200, 80, 0.9)';
+        ctx.fillText(waveLabel, 26, 93);
+
+        // Next-wave countdown (only when > 0)
+        if (waveCountdown > 0) {
+            const cdLabel = `next wave in ${Math.ceil(waveCountdown)}s`;
+            const cdW = ctx.measureText(cdLabel).width + 16;
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+            this._roundRect(ctx, 18, 116, cdW, 20, 4);
+            ctx.fill();
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+            ctx.font = '11px monospace';
+            ctx.fillText(cdLabel, 26, 120);
+        }
+
         // ── Survival time (top-right) ─────────────────────────────────────────
-        const mins = String(Math.floor(survivalSeconds / 60)).padStart(2, '0');
-        const secs = String(Math.floor(survivalSeconds % 60)).padStart(2, '0');
+        const mins    = String(Math.floor(survivalSeconds / 60)).padStart(2, '0');
+        const secs    = String(Math.floor(survivalSeconds % 60)).padStart(2, '0');
         const timeStr = `${mins}:${secs}`;
 
         ctx.font = 'bold 20px monospace';
         ctx.textAlign = 'right';
         ctx.textBaseline = 'top';
-
-        // Pill backdrop
         const timeW = ctx.measureText(timeStr).width + 24;
         ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
         this._roundRect(ctx, w - timeW - 10, 14, timeW, 30, 6);
         ctx.fill();
-
         ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
         ctx.fillText(timeStr, w - 22, 20);
-
-        // Label beneath
         ctx.font = '10px monospace';
         ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
         ctx.fillText('SURVIVED', w - 22, 46);
 
-        // ── Ghost count (below health bar) ────────────────────────────────────
-        ctx.font = 'bold 12px monospace';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'top';
-
-        const ghostLabel = `GHOSTS  ${ghostCount}`;
-        const ghostLabelW = ctx.measureText(ghostLabel).width + 16;
-
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-        this._roundRect(ctx, 18, 60, ghostLabelW, 22, 4);
-        ctx.fill();
-
-        ctx.fillStyle = ghostCount > 0 ? 'rgba(200, 200, 255, 0.9)' : 'rgba(120, 220, 120, 0.9)';
-        ctx.fillText(ghostLabel, 26, 65);
-
         ctx.restore();
     }
 
-    // Minimal rounded-rect helper (no Path2D dependency)
     _roundRect(ctx, x, y, w, h, r) {
         ctx.beginPath();
         ctx.moveTo(x + r, y);
@@ -265,6 +270,70 @@ class HUD {
         ctx.lineTo(x,     y + r);
         ctx.arcTo(x,     y,     x + r, y,         r);
         ctx.closePath();
+    }
+}
+
+// ─── WaveManager ──────────────────────────────────────────────────────────────
+
+const WAVE_INTERVAL   = 20000; // ms between waves
+const BASE_GHOST_COUNT = 4;
+const BASE_SPEED       = 2;
+const BASE_DAMAGE      = 8;
+
+class WaveManager {
+    constructor() {
+        this.wave            = 1;
+        this.timeSinceWave   = 0; // ms elapsed since last wave
+    }
+
+    // Returns difficulty params for current wave
+    _params(wave) {
+        const scale  = wave - 1;
+        return {
+            count:  BASE_GHOST_COUNT + scale * 2,
+            speed:  Math.min(BASE_SPEED  + scale * 0.3, 5.5),
+            damage: Math.min(BASE_DAMAGE + scale * 2,   30)
+        };
+    }
+
+    // Seconds until next wave (for HUD)
+    get countdown() {
+        return Math.max(0, (WAVE_INTERVAL - this.timeSinceWave) / 1000);
+    }
+
+    update(deltaTime, gameState) {
+        if (gameState.isGameOver) return;
+
+        this.timeSinceWave += deltaTime;
+
+        if (this.timeSinceWave >= WAVE_INTERVAL) {
+            this.timeSinceWave -= WAVE_INTERVAL;
+            this.wave++;
+            this._spawnWave(gameState);
+        }
+    }
+
+    _spawnWave(gameState) {
+        const { count, speed, damage } = this._params(this.wave);
+        const player       = gameState.player;
+        const chunkManager = gameState.chunkManager;
+        const minDist = 350;
+        const maxDist = 650;
+
+        for (let i = 0; i < count; i++) {
+            const angle = (i / count) * Math.PI * 2 + Math.random() * 0.4;
+            const dist  = minDist + Math.random() * (maxDist - minDist);
+            const pos   = chunkManager.findWalkableNear(
+                player.x + Math.cos(angle) * dist,
+                player.y + Math.sin(angle) * dist
+            );
+            const ghost = new Ghost(pos.x, pos.y, { speed, health: 30, damage });
+            ghost.setAI(new BasicAI({
+                detectionRange: 350 + (this.wave - 1) * 20,
+                stopDistance:   22
+            }));
+            gameState.ghosts.push(ghost);
+        }
     }
 }
 
@@ -350,9 +419,7 @@ class Renderer {
         this.canvas.height = window.innerHeight;
     }
 
-    triggerShake(magnitude = 8) {
-        this._shake.magnitude = magnitude;
-    }
+    triggerShake(magnitude = 8) { this._shake.magnitude = magnitude; }
 
     _updateShake() {
         if (this._shake.magnitude > 0.1) {
@@ -396,14 +463,13 @@ class Renderer {
         this.ctx.restore();
     }
 
-    drawGameOver() {
+    drawGameOver(wave, survivalSeconds) {
         const ctx = this.ctx;
         const w = this.canvas.width;
         const h = this.canvas.height;
 
         ctx.save();
         ctx.globalCompositeOperation = 'source-over';
-
         ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
         ctx.fillRect(0, 0, w, h);
 
@@ -411,11 +477,18 @@ class Renderer {
         ctx.textBaseline = 'middle';
         ctx.font = 'bold 72px sans-serif';
         ctx.fillStyle = '#cc2222';
-        ctx.fillText('GAME OVER', w / 2, h / 2 - 30);
+        ctx.fillText('GAME OVER', w / 2, h / 2 - 50);
 
-        ctx.font = '24px sans-serif';
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-        ctx.fillText('Refresh to try again', w / 2, h / 2 + 40);
+        const mins = String(Math.floor(survivalSeconds / 60)).padStart(2, '0');
+        const secs = String(Math.floor(survivalSeconds % 60)).padStart(2, '0');
+
+        ctx.font = '26px monospace';
+        ctx.fillStyle = 'rgba(255, 200, 80, 0.9)';
+        ctx.fillText(`Reached Wave ${wave}`, w / 2, h / 2 + 10);
+
+        ctx.font = '20px sans-serif';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.fillText(`Survived ${mins}:${secs}  ·  Refresh to try again`, w / 2, h / 2 + 55);
 
         ctx.restore();
     }
@@ -438,12 +511,10 @@ class GameState {
         this.activeEffects = [];
         this.damageFlashAlpha = 0;
         this.isGameOver = false;
-        this.survivalTime = 0; // ms
+        this.survivalTime = 0;
     }
 
-    triggerDamageFlash() {
-        this.damageFlashAlpha = 0.55;
-    }
+    triggerDamageFlash() { this.damageFlashAlpha = 0.55; }
 
     applyEffect({ type, multiplier, duration }) {
         const effect = { type, multiplier, duration, startedAt: Date.now() };
@@ -491,8 +562,7 @@ class GameState {
         if (this.damageFlashAlpha > 0)
             this.damageFlashAlpha = Math.max(0, this.damageFlashAlpha - (deltaTime / 16) * 0.06);
 
-        this.particles = this.particles.filter(p => (now - p.created) < p.duration);
-
+        this.particles  = this.particles.filter(p => (now - p.created) < p.duration);
         this.projectiles = this.projectiles.filter(p => {
             const dt = deltaTime / 16;
             p.x += p.vx * dt;
@@ -500,7 +570,7 @@ class GameState {
             return (now - p.created) < 2000;
         });
 
-        this.ghosts = this.ghosts.filter(ghost => ghost.health > 0);
+        this.ghosts = this.ghosts.filter(g => g.health > 0);
 
         for (const ghost of this.ghosts) {
             ghost.update(player, this.chunkManager, deltaTime);
@@ -515,17 +585,15 @@ class GameState {
         }
 
         if (player.health <= 0) this.isGameOver = true;
-
         if (this.lighting) this.lighting.update(deltaTime);
-
         if (this.chunkManager) this.chunkManager.unloadDistant(player.x, player.y);
     }
 }
 
-// ─── Ghost spawner ────────────────────────────────────────────────────────────
+// ─── Ghost spawner (initial wave) ─────────────────────────────────────────────
 
-function spawnGhosts(count, playerX, playerY, chunkManager) {
-    const ghosts = [];
+function spawnGhosts(count, playerX, playerY, chunkManager, speed = BASE_SPEED, damage = BASE_DAMAGE) {
+    const ghosts  = [];
     const minDist = 300;
     const maxDist = 600;
     for (let i = 0; i < count; i++) {
@@ -535,7 +603,7 @@ function spawnGhosts(count, playerX, playerY, chunkManager) {
             playerX + Math.cos(angle) * dist,
             playerY + Math.sin(angle) * dist
         );
-        const ghost = new Ghost(pos.x, pos.y, { speed: 2 + Math.random(), health: 30, damage: 8 });
+        const ghost = new Ghost(pos.x, pos.y, { speed: speed + Math.random() * 0.5, health: 30, damage });
         ghost.setAI(new BasicAI({ detectionRange: 350, stopDistance: 22 }));
         ghosts.push(ghost);
     }
@@ -565,10 +633,11 @@ class Game {
         });
 
         chunkManager.getSurroundingChunks(startX, startY, 2);
-        this.gameState.ghosts = spawnGhosts(4, startX, startY, chunkManager);
+        this.gameState.ghosts = spawnGhosts(BASE_GHOST_COUNT, startX, startY, chunkManager);
 
         this.chunkRenderer = new ChunkRenderer(this.renderer);
         this.hud = new HUD(this.renderer);
+        this.waveManager = new WaveManager();
         this.lastTime = null;
 
         this.bindEvents();
@@ -584,11 +653,13 @@ class Game {
         const scaledDelta = deltaTime * this.gameState.timeScale;
         this.gameState.player.update(this.input, scaledDelta, this.gameState.chunkManager);
         this.gameState.update(scaledDelta, this.renderer);
+        this.waveManager.update(scaledDelta, this.gameState);
     }
 
     render() {
         const { player, ghosts, particles, projectiles, chunkManager,
                 lighting, damageFlashAlpha, isGameOver, survivalTime } = this.gameState;
+        const { wave, countdown } = this.waveManager;
 
         this.renderer.clear();
         this.renderer.setCamera(player.x, player.y);
@@ -600,14 +671,12 @@ class Game {
         }
 
         // 2. Particles
-        particles.forEach(p => {
-            this.renderer.drawCircle(p.x, p.y, p.radius * 0.3, 'rgba(255, 200, 100, 0.4)');
-        });
+        particles.forEach(p =>
+            this.renderer.drawCircle(p.x, p.y, p.radius * 0.3, 'rgba(255, 200, 100, 0.4)'));
 
         // 3. Projectiles
-        projectiles.forEach(p => {
-            this.renderer.drawCircle(p.x, p.y, 5, 'rgba(255, 255, 100, 0.9)');
-        });
+        projectiles.forEach(p =>
+            this.renderer.drawCircle(p.x, p.y, 5, 'rgba(255, 255, 100, 0.9)'));
 
         // 4. Ghosts
         ghosts.forEach(ghost => { if (ghost.render) ghost.render(this.renderer); });
@@ -621,23 +690,21 @@ class Game {
         // 7. Damage flash
         this.renderer.drawDamageFlash(damageFlashAlpha);
 
-        // 8. HUD (above all gameplay, below game-over)
-        if (!isGameOver) {
-            this.hud.render(player, ghosts.length, survivalTime / 1000);
-        }
+        // 8. HUD
+        if (!isGameOver)
+            this.hud.render(player, ghosts.length, survivalTime / 1000, wave, countdown);
 
-        // 9. Game over overlay
-        if (isGameOver) this.renderer.drawGameOver();
+        // 9. Game over
+        if (isGameOver)
+            this.renderer.drawGameOver(wave, survivalTime / 1000);
     }
 
     loop(timestamp) {
         if (this.lastTime === null) this.lastTime = timestamp;
         const deltaTime = Math.min(timestamp - this.lastTime, 100);
         this.lastTime = timestamp;
-
         this.update(deltaTime);
         this.render();
-
         requestAnimationFrame((ts) => this.loop(ts));
     }
 }
