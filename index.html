@@ -3,29 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Game Engine</title>
+    <title>Kurukshetra — The Dark Field</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            overflow: hidden;
-            background: #111;
-        }
-        
-        #gameCanvas {
-            display: block;
-        }
-        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { overflow: hidden; background: #0a0a0f; }
+        #gameCanvas { display: block; }
         #ui-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
+            position: absolute; top: 0; left: 0;
+            width: 100%; height: 100%;
             pointer-events: none;
         }
     </style>
@@ -33,7 +18,6 @@
 <body>
     <canvas id="gameCanvas"></canvas>
     <div id="ui-overlay"></div>
-    
-    <script src="main.js"></script>
+    <script type="module" src="main.js"></script>
 </body>
 </html>
