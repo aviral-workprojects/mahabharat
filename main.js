@@ -1,6 +1,6 @@
 import TileRenderer from './tileRenderer.js';
 
-// ─── ChunkManager (frontend mock — swap internals for API later) ───────────────
+// ─── ChunkManager ─────────────────────────────────────────────────────────────
 
 class ChunkManager {
     constructor(chunkSize = 32, tileSize = 50) {
@@ -10,7 +10,6 @@ class ChunkManager {
         this.worldSeed = Math.floor(Math.random() * 2 ** 31);
     }
 
-    // Deterministic pseudo-random from chunk coords + seed
     _chunkRng(chunkX, chunkY) {
         let h = this.worldSeed ^ (chunkX * 374761393) ^ (chunkY * 1057926937);
         h = Math.imul(h ^ (h >>> 13), 1540483477);
@@ -44,7 +43,6 @@ class ChunkManager {
             terrain.push(row);
         }
 
-        // Clear a safe zone in the center of the first chunk
         if (chunkX === 0 && chunkY === 0) {
             const mid = Math.floor(size / 2);
             for (let dy = -2; dy <= 2; dy++) {
@@ -54,12 +52,7 @@ class ChunkManager {
             }
         }
 
-        return {
-            x: chunkX,
-            y: chunkY,
-            terrain,
-            seed: this.worldSeed
-        };
+        return { x: chunkX, y: chunkY, terrain, seed: this.worldSeed };
     }
 
     getChunk(chunkX, chunkY) {
@@ -70,15 +63,42 @@ class ChunkManager {
         return this.loadedChunks.get(key);
     }
 
-    getChunkAt(worldX, worldY) {
-        const chunkX = Math.floor(worldX / (this.chunkSize * this.tileSize));
-        const chunkY = Math.floor(worldY / (this.chunkSize * this.tileSize));
-        return this.getChunk(chunkX, chunkY);
+    _getTileAt(worldX, worldY) {
+        const chunkPixels = this.chunkSize * this.tileSize;
+        const chunkX = Math.floor(worldX / chunkPixels);
+        const chunkY = Math.floor(worldY / chunkPixels);
+        const chunk = this.getChunk(chunkX, chunkY);
+
+        const localX = Math.floor((worldX - chunkX * chunkPixels) / this.tileSize);
+        const localY = Math.floor((worldY - chunkY * chunkPixels) / this.tileSize);
+
+        if (localY < 0 || localY >= this.chunkSize || localX < 0 || localX >= this.chunkSize) {
+            return 'cliff';
+        }
+
+        return chunk.terrain[localY][localX];
+    }
+
+    isWalkable(worldX, worldY) {
+        const tile = this._getTileAt(worldX, worldY);
+        return tile !== 'cliff' && tile !== 'rock';
+    }
+
+    getMovementModifier(worldX, worldY) {
+        const tile = this._getTileAt(worldX, worldY);
+        switch (tile) {
+            case 'plain': return 1.0;
+            case 'dune':  return 0.6;
+            case 'rock':  return 0.3;
+            case 'cliff': return 0.0;
+            default:      return 1.0;
+        }
     }
 
     getSurroundingChunks(worldX, worldY, radius = 1) {
-        const cx = Math.floor(worldX / (this.chunkSize * this.tileSize));
-        const cy = Math.floor(worldY / (this.chunkSize * this.tileSize));
+        const chunkPixels = this.chunkSize * this.tileSize;
+        const cx = Math.floor(worldX / chunkPixels);
+        const cy = Math.floor(worldY / chunkPixels);
         const chunks = [];
         for (let dy = -radius; dy <= radius; dy++) {
             for (let dx = -radius; dx <= radius; dx++) {
@@ -89,72 +109,15 @@ class ChunkManager {
     }
 
     unloadDistant(worldX, worldY, maxDistance = 3) {
-        const cx = Math.floor(worldX / (this.chunkSize * this.tileSize));
-        const cy = Math.floor(worldY / (this.chunkSize * this.tileSize));
+        const chunkPixels = this.chunkSize * this.tileSize;
+        const cx = Math.floor(worldX / chunkPixels);
+        const cy = Math.floor(worldY / chunkPixels);
         for (const key of this.loadedChunks.keys()) {
             const [kx, ky] = key.split(',').map(Number);
             if (Math.max(Math.abs(kx - cx), Math.abs(ky - cy)) > maxDistance) {
                 this.loadedChunks.delete(key);
             }
         }
-    }
-
-    isWalkable(worldX, worldY) {
-        const chunkPixels = this.chunkSize * this.tileSize;
-        const chunkX = Math.floor(worldX / chunkPixels);
-        const chunkY = Math.floor(worldY / chunkPixels);
-        const chunk = this.getChunk(chunkX, chunkY);
-
-        const localX = Math.floor((worldX - chunkX * chunkPixels) / this.tileSize);
-        const localY = Math.floor((worldY - chunkY * chunkPixels) / this.tileSize);
-
-        if (localY < 0 || localY >= this.chunkSize || localX < 0 || localX >= this.chunkSize) {
-            return false;
-        }
-
-        const tile = chunk.terrain[localY][localX];
-        return tile !== 'cliff' && tile !== 'rock';
-    }
-
-    // Build a map-compatible object for TileRenderer
-    buildMapView(worldX, worldY, radius = 1) {
-        const chunkPixels = this.chunkSize * this.tileSize;
-        const cx = Math.floor(worldX / chunkPixels);
-        const cy = Math.floor(worldY / chunkPixels);
-
-        const minCx = cx - radius;
-        const minCy = cy - radius;
-        const span = radius * 2 + 1;
-        const totalCols = span * this.chunkSize;
-        const totalRows = span * this.chunkSize;
-
-        const grid = [];
-        for (let row = 0; row < totalRows; row++) grid.push(new Array(totalCols).fill(0));
-
-        for (let dy = -radius; dy <= radius; dy++) {
-            for (let dx = -radius; dx <= radius; dx++) {
-                const chunk = this.getChunk(cx + dx, cy + dy);
-                const baseCol = (dx + radius) * this.chunkSize;
-                const baseRow = (dy + radius) * this.chunkSize;
-
-                for (let ty = 0; ty < this.chunkSize; ty++) {
-                    for (let tx = 0; tx < this.chunkSize; tx++) {
-                        const tile = chunk.terrain[ty][tx];
-                        grid[baseRow + ty][baseCol + tx] = tile === 'cliff' || tile === 'rock' ? 1 : 0;
-                    }
-                }
-            }
-        }
-
-        return {
-            grid,
-            width: totalCols,
-            height: totalRows,
-            tileSize: this.tileSize,
-            // Offset so TileRenderer camera math aligns with world coords
-            originX: minCx * chunkPixels,
-            originY: minCy * chunkPixels
-        };
     }
 }
 
@@ -187,7 +150,6 @@ class ChunkRenderer {
                     const screenX = chunkWorldX + tx * tileSize - cam.x;
                     const screenY = chunkWorldY + ty * tileSize - cam.y;
 
-                    // Cull off-screen tiles
                     if (
                         screenX + tileSize < 0 || screenX > this.renderer.canvas.width ||
                         screenY + tileSize < 0 || screenY > this.renderer.canvas.height
@@ -255,8 +217,15 @@ class Player {
         }
 
         const dt = deltaTime / 16;
-        const nextX = this.x + this.velocity.x * dt;
-        const nextY = this.y + this.velocity.y * dt;
+        const terrainModifier = chunkManager
+            ? chunkManager.getMovementModifier(this.x, this.y)
+            : 1.0;
+
+        const moveX = this.velocity.x * dt * terrainModifier;
+        const moveY = this.velocity.y * dt * terrainModifier;
+
+        const nextX = this.x + moveX;
+        const nextY = this.y + moveY;
 
         if (chunkManager) {
             if (chunkManager.isWalkable(nextX, this.y)) this.x = nextX;
@@ -392,7 +361,6 @@ class Game {
         this.input = new InputHandler();
 
         const chunkManager = new ChunkManager(32, 50);
-        const chunkPixels = chunkManager.chunkSize * chunkManager.tileSize;
         const mid = Math.floor(chunkManager.chunkSize / 2);
         const startX = mid * chunkManager.tileSize + chunkManager.tileSize / 2;
         const startY = mid * chunkManager.tileSize + chunkManager.tileSize / 2;
